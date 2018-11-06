@@ -94,7 +94,7 @@ func (f *Fds) Listen(network, addr string) (net.Listener, error) {
 
 	if _, ok := ln.(Listener); !ok {
 		ln.Close()
-		return nil, erros.Errorf("%T doesn't implement grace.Listener", ln)
+		return nil, errors.Errorf("%T doesn't implement grace.Listener", ln)
 	}
 
 	err = f.addListenerLocked(network, addr, ln.(Listener))
@@ -153,7 +153,7 @@ func (f *Fds) addListenerLocked(network, addr string, ln Listener) error {
 		ifc.SetUnlinkOnClose(false)
 	}
 
-	return f.addConnLocked(listenKind, netword, addr, ln)
+	return f.addConnLocked(listenKind, network, addr, ln)
 }
 
 // Conn returns an inherited connections or nil.
@@ -240,7 +240,7 @@ func (f *Fds) AddFile(name string, file *os.File) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	delete(f.inhertied, key)
+	delete(f.inherited, key)
 	f.used[key] = dup
 	return nil
 }
@@ -251,7 +251,7 @@ func (f *Fds) copy() map[fileName]*file {
 
 	files := make(map[fileName]*file, len(f.used))
 	for key, file := range f.used {
-		fiels[key] = file
+		files[key] = file
 	}
 
 	return files
