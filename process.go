@@ -10,7 +10,7 @@ var initialWD, _ = os.Getwd()
 
 type process interface {
     fmt.Stringer
-    Singal(sig os.Signal) error
+    Signal(sig os.Signal) error
     Wait() error
 }
 
