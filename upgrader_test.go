@@ -85,3 +85,204 @@ func TestMain(m *testing.M) {
         panic(err)
     }
 }
+
+func TestUpgraderOnOS(t *testing.T) {
+    u, err := newUpgrader(stdEnv, Options{})
+    if err != nil {
+        t.Fatal("Can't create Upgrader:", err)
+    }
+    defer u.Stop()
+
+    rPid, wPid, err := os.Pipe()
+    if err != nil {
+        t.Fatal(err)
+    }
+    defer rPid.Close()
+
+    if err := u.Fds.AddFile("pid", wPid); err != nil {
+        t.Fatal(err)
+    }
+    wPid.Close()
+
+    var readers []*os.File
+    defer func() {
+        for _, r := range readers {
+            r.Close()
+        }
+    }()
+
+    for _, name := range names {
+        r, w, err := os.Pipe()
+        if err != nil {
+            t.Fatal(err)
+        }
+        readers = append(readers, r)
+
+        if err := u.Fds.AddFile(name, w); err != nil {
+            t.Fatal(err)
+        }
+        w.Close()
+    }
+
+    if err := u.Upgrade(); err == nil {
+        t.Error("Upgrade before Ready should return an error")
+    }
+
+    if err := u.Ready(); err != nil {
+        t.Fatal("Ready failed:", err)
+    }
+
+    if err := u.Upgrade(); err != nil {
+        t.Fatal("Upgrade failed:" err)
+    }
+
+    // Close copies of write pipes, so that
+    // reads below return EOF.
+    u.Stop()
+
+    buf := make([]byte, 8)
+    if _, err := rPid.Read(buf); err != nil {
+        t.Fatal(err)
+    }
+
+    if int(binary.LittleEndian.Uint64(buf)) == os.Getpid() {
+        t.Error("Child did not execute in new process")
+    }
+
+    for i, name := range names {
+        nameBytes, err := ioutil.ReadAll(readers[i])
+        if err != nil {
+            t.Fatal(err)
+        }
+        if !bytes.Equal(nameBytes, []byte(name)) {
+            t.Fatalf("File %s has name %s in child", name, string(nameBytes))
+        }
+    }
+}
+
+func TestUpgraderCleanExit(t *testing.T) {
+    t.Parallel()
+
+    u := newTestUpgrader(Options{})
+    defer u.Stop()
+
+    errs := u.upgradeAsync()
+
+    first := <-u.procs
+    first.exit(nil)
+
+    if err := <-errs; err == nil {
+        t.Error("Expected Upgrade to return error when new child exits clean")
+    }
+}
+
+func TestUpgraderUncleanExit(t *testing.T) {
+    t.Parallel()
+
+    u := newTestUpgrader(Options{})
+    defer u.Stop()
+
+    errs := u.upgradeAsync()
+
+    first := <-u.procs
+    first.exit(errors.New("some error"))
+
+    if err := <-errs; err == nil {
+        t.Error("Expected Upgrade to return error when new child exits unclean")
+    }
+}
+
+func TestUpgraderTimeout(t *testing.T) {
+    t.Parallel()
+
+    u := newTestUpgrader(Options{
+        UpgradeTimeout: 10 * time.Millisecond,
+    })
+    defer u.Stop()
+
+    errs := u.upgradeAsync()
+
+    new := <-u.procs
+    if sig := new.recvSignal(nil); sig != os.Kill {
+        t.Error("Expected os.Kill, got", sig)
+    }
+
+    if err := <-errs; err == nil {
+        t.Error("Expected Upgrade to return error when new child times out")
+    }
+}
+
+func TestUpgraderConcurrentUpgrade(t *testing.T) {
+    t.Parallel()
+
+    u := newTestUpgrader(Options{})
+    defer u.Stop()
+
+    u.upgradeAsync()
+
+    new := <-u.procs
+    go new.recvSignal(nil)
+
+    if err := u.Upgrade(); err == nil {
+        t.Error("Expected Upgrade to refuse concurrent upgrade")
+    }
+
+    new.exit(nil)
+}
+
+func TestUpgraderReady(t *testing.T) {
+    t.Parallel()
+
+    u := newTestUpgrader(Options{})
+    defer u.Stop()
+
+    errs := u.upgradeAsync()
+
+    new := <-u.procs
+    _, exited, err := new.notify()
+    if err != nil {
+        t.Fatal("Can't notify Upgrader:", err)
+    }
+
+    if err := <-errs; err != nil {
+        t.Fatal("Expected Upgrade to return nil whne child is ready")
+    }
+
+    select {
+    case <-u.Exit():
+    default:
+        t.Error("Expected Exit() to be closed when upgrade is done")
+    }
+
+    // Simulate the process exiting
+    u.exitFd.file.Close()
+
+    select {
+    case err := <-exited:
+        if err != nil {
+            t.Error("exit error", err)
+        }
+    case <-time.After(time.Second):
+        t.Error("Child wasn't notified of parent exiting")
+    }
+}
+
+func TestUpgraderShutdownCancelsUpgrade(t *testing.T) {
+    t.Parallel()
+
+    u := newTestUpgrader(Options{})
+    defer u.Stop()
+
+    errs := u.upgradeAsync()
+    new := <-u.procs
+    go new.recvSignal(nil)
+
+    u.Stop()
+    if err := <-errs; err == nil {
+        t.Error("Upgrade doesn't return an error when Stopp()ed")
+    }
+
+    if err := u.Upgrade(); err == nil {
+        t.Error("Upgrade doesn't return an error after Stop()")
+    }
+}
