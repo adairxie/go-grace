@@ -35,7 +35,7 @@ type Upgrader struct {
 	stopC      chan struct{}
 	upgradeSem chan struct{}
 	exitC      chan struct{}      // only close this if holding upgradeSem
-	exitFd     neverCloseTHisFile // protected by upgradeSem
+	exitFd     neverCloseThisFile // protected by upgradeSem
 	parentErr  error              // protected by upgradeSem
 
 	Fds *Fds
@@ -159,7 +159,7 @@ func (u *Upgrader) Upgrade() error {
     }
 
     if u.parent != nil {
-        if uf.parentErr != nil {
+        if u.parentErr != nil {
             return u.parentErr
         }
 
